@@ -5,11 +5,11 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:translateX="72"
-        android:translateY="138"
-        android:scaleX="0.15"
-        android:scaleY="0.15">
-        <!-- Exact paths from /home/ajay/rat-project/app_icon.svg, filled white -->
+        android:translateX="31"
+        android:translateY="36"
+        android:scaleX="0.08"
+        android:scaleY="0.08">
+        <!-- Exact SVG paths from /home/ajay/rat-project/app_icon.svg with #FFFFFF fill -->
         <path
             android:fillColor="#FFFFFF"
             android:pathData="M420.5 253.9a24 24 0 1 1 0 48 24 24 0 1 1 0-48z" />
