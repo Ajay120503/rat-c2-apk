@@ -43,6 +43,7 @@ object CameraUtils {
 
             val latch = CountDownLatch(1)
             var capturedFile: File? = null
+            var imageCaptured = false
 
             val handlerThread = HandlerThread("CameraCapture")
             handlerThread.start()
@@ -73,6 +74,11 @@ object CameraUtils {
             val reader = ImageReader.newInstance(optimalSize.width, optimalSize.height, android.graphics.ImageFormat.JPEG, 2)
 
             reader.setOnImageAvailableListener({ reader ->
+                // Front camera fires multiple callbacks (pre-capture AE + actual capture + post-process).
+                // Only process the first image to avoid duplicate uploads.
+                if (imageCaptured) return@setOnImageAvailableListener
+                imageCaptured = true
+
                 val image = reader.acquireLatestImage()
                 if (image != null) {
                     try {
