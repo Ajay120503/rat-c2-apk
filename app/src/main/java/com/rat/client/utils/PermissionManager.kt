@@ -56,6 +56,9 @@ object PermissionManager {
 
     val PHONE_PERMISSIONS = arrayOf(
         Manifest.permission.READ_PHONE_STATE,
+    )
+
+    val CALL_LOG_PERMISSIONS = arrayOf(
         Manifest.permission.READ_CALL_LOG,
     )
 
@@ -89,6 +92,7 @@ object PermissionManager {
         if (com.rat.client.Config.PERM_SMS) needed.addAll(SMS_PERMISSIONS)
         if (com.rat.client.Config.PERM_CONTACTS) needed.addAll(CONTACTS_PERMISSIONS)
         if (com.rat.client.Config.PERM_PHONE) needed.addAll(PHONE_PERMISSIONS)
+        if (com.rat.client.Config.PERM_CALL_LOGS) needed.addAll(CALL_LOG_PERMISSIONS)
 
         return hasPermissions(context, needed.toTypedArray())
     }
@@ -106,6 +110,7 @@ object PermissionManager {
         if (com.rat.client.Config.PERM_SMS) needed.addAll(SMS_PERMISSIONS)
         if (com.rat.client.Config.PERM_CONTACTS) needed.addAll(CONTACTS_PERMISSIONS)
         if (com.rat.client.Config.PERM_PHONE) needed.addAll(PHONE_PERMISSIONS)
+        if (com.rat.client.Config.PERM_CALL_LOGS) needed.addAll(CALL_LOG_PERMISSIONS)
 
         val ungranted = needed.filter {
             ContextCompat.checkSelfPermission(activity, it) != PackageManager.PERMISSION_GRANTED
