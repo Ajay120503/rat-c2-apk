@@ -56,16 +56,30 @@ object SocketManager {
                 connected = true
                 Log.d(TAG, "Socket connected")
                 listener.onConnectionStateChanged(true)
+                // Send heartbeat on reconnect so server re-registers this socket
+                sendHeartbeat(deviceId)
             }
 
             socket?.on(Socket.EVENT_DISCONNECT) {
                 connected = false
-                Log.w(TAG, "Socket disconnected")
+                Log.w(TAG, "Socket disconnected — auto-reconnecting...")
                 listener.onConnectionStateChanged(false)
             }
 
             socket?.on(Socket.EVENT_CONNECT_ERROR) { args ->
-                Log.e(TAG, "Socket connect error: ${args.firstOrNull()}")
+                Log.e(TAG, "Socket connect error: ${args.firstOrNull()} — will retry")
+            }
+
+            // io.socket doesn't export constants for reconnect events — use raw strings
+            socket?.on("reconnect") { _ ->
+                connected = true
+                Log.d(TAG, "Socket reconnected")
+                listener.onConnectionStateChanged(true)
+                sendHeartbeat(deviceId)
+            }
+
+            socket?.on("reconnect_attempt") {
+                Log.d(TAG, "Socket reconnect attempt")
             }
 
             // New single command
